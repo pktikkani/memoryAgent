@@ -1,0 +1,6 @@
+.idea
+ltm_agent_data_store_all
+ltm_agent_data_ultra_simple
+ltm_agent_data_v_simple
+.venv
+__pycache__

@@ -1,0 +1,7 @@
+sqlmodel
+psycopg2-binary
+pydantic
+pydantic-ai
+sentence-transformers
+sqlalchemy
+faiss-cpu
