@@ -265,6 +265,3 @@ class MemoryManagerSQL:
         except Exception as e:
             print(f"Error closing memory manager: {e}")
 
-
-
-DATABASE_URL = "postgresql://your_user:your_password@localhost:5432/pydantic_ai_ltm"
