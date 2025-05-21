@@ -93,7 +93,7 @@ def run_phase2_recall_everything_interactive():
 
         print("    Retrieving relevant past statements from LTM...")
         retrieved_ltm_items = memory_manager.retrieve_memories_semantic(
-            query=user_query, user_id=USER_ID, k=3 # Retrieve top 3 past user utterances
+            query=user_query, user_id=USER_ID, k=10 # Retrieve top 3 past user utterances
         )
 
         if retrieved_ltm_items:
