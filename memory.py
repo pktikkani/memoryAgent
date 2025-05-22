@@ -10,6 +10,9 @@ import faiss
 import numpy as np
 from sentence_transformers import SentenceTransformer
 from sqlmodel import create_engine, Session, select # Import select
+import time
+import signal
+import atexit
 
 # This is your Pydantic model for API/application logic
 class LongTermMemoryEntry(PydanticBaseModel):
@@ -85,6 +88,18 @@ class MemoryManagerSQL:
             self._initialize_fresh_faiss()
 
         print("MemoryManagerSQL initialized.")
+        self._unsaved_changes = 0
+        self._batch_save_threshold = 5  # Save every 5 additions
+        self._last_save_time = time.time()
+        self._save_interval_seconds = 300  # Save every 5 minutes regardless
+        atexit.register(self.close)
+        signal.signal(signal.SIGINT, self._signal_handler)
+        signal.signal(signal.SIGTERM, self._signal_handler)
+
+    def _signal_handler(self, signum, frame):
+        print(f"Received signal {signum}, cleaning up...")
+        self.close()
+        exit(0)
 
     def _initialize_fresh_faiss(self):
         self.faiss_index = faiss.IndexIDMap(faiss.IndexFlatL2(self.embedding_dim))
@@ -99,6 +114,44 @@ class MemoryManagerSQL:
         except Exception as e:
             print(f"Error initializing SQLModel database table: {e}")
             raise
+
+    def _save_faiss_to_disk(self):
+        """Save FAISS index and mappings to disk"""
+        try:
+            # Use temporary files for atomic writes
+            index_path = os.path.join(self.data_dir, "my_faiss_index.idx")
+            temp_index_path = index_path + ".tmp"
+
+            map_path = os.path.join(self.data_dir, "faiss_id_mappings.pkl")
+            temp_map_path = map_path + ".tmp"
+
+            # Write to temporary files first
+            faiss.write_index(self.faiss_index, temp_index_path)
+
+            mappings_and_next_id_to_save = {
+                "faiss_id_to_memory_uuid": self._faiss_id_to_memory_uuid,
+                "memory_uuid_to_faiss_id": self._memory_uuid_to_faiss_id,
+                "next_available_faiss_id": self._next_available_faiss_id
+            }
+
+            with open(temp_map_path, "wb") as f:
+                pickle.dump(mappings_and_next_id_to_save, f)
+
+            # Atomic rename (on most filesystems)
+            os.rename(temp_index_path, index_path)
+            os.rename(temp_map_path, map_path)
+
+            print(f"FAISS data saved to disk (Index: {self.faiss_index.ntotal} vectors)")
+
+        except Exception as e:
+            print(f"Error saving FAISS data to disk: {e}")
+            # Clean up temp files if they exist
+            for temp_path in [temp_index_path, temp_map_path]:
+                if os.path.exists(temp_path):
+                    try:
+                        os.remove(temp_path)
+                    except:
+                        raise
 
     def add_memory(self, memory_item_pydantic: LongTermMemoryEntry):
         # Convert Pydantic model to SQLModel instance
@@ -132,6 +185,7 @@ class MemoryManagerSQL:
 
                 # Manage FAISS IDs
                 faiss_id_to_use = self._memory_uuid_to_faiss_id.get(memory_item_pydantic.memory_id)
+                # Track unsaved changes
                 if faiss_id_to_use is None:  # New entry for FAISS
                     faiss_id_to_use = self._next_available_faiss_id
                     self._memory_uuid_to_faiss_id[memory_item_pydantic.memory_id] = faiss_id_to_use
@@ -145,10 +199,24 @@ class MemoryManagerSQL:
                     print(
                         f"Updated/Re-added embedding for memory {memory_item_pydantic.memory_id} in FAISS (FAISS ID: {faiss_id_to_use}).")
 
+                # NOW track unsaved changes and check if we should save (AFTER adding to FAISS)
+
+                self._unsaved_changes += 1
+
+                # Check if we should save
+                should_save = (
+                        self._unsaved_changes >= self._batch_save_threshold or
+                        time.time() - self._last_save_time > self._save_interval_seconds
+                )
+
+                if should_save:
+                    self._save_faiss_to_disk()
+                    self._unsaved_changes = 0
+                    self._last_save_time = time.time()
+
             except Exception as e:
                 print(f"Error adding/updating embedding for memory {memory_item_pydantic.memory_id} to FAISS: {e}")
 
-        # TODO: Persist FAISS index and id_map to disk
 
     def retrieve_memories_semantic(self, query: str, user_id: Optional[str] = None, k: int = 3) -> List[
         LongTermMemoryEntry]:
@@ -241,22 +309,11 @@ class MemoryManagerSQL:
                 return []
 
     def close(self):
+        if self._unsaved_changes > 0:
+            print(f"Saving {self._unsaved_changes} unsaved changes before closing...")
+            self._save_faiss_to_disk()
+
         try:
-            # Save FAISS index
-            index_path = os.path.join(self.data_dir, "my_faiss_index.idx")
-            faiss.write_index(self.faiss_index, index_path)
-            print(f"FAISS index saved to {index_path}")
-
-            mappings_and_next_id_to_save = {
-                "faiss_id_to_memory_uuid": self._faiss_id_to_memory_uuid,
-                "memory_uuid_to_faiss_id": self._memory_uuid_to_faiss_id,
-                "next_available_faiss_id": self._next_available_faiss_id
-            }
-            map_path = os.path.join(self.data_dir, "faiss_id_mappings.pkl")
-            with open(map_path, "wb") as f:
-                pickle.dump(mappings_and_next_id_to_save, f)
-            print(f"FAISS ID mappings and next_id saved to {map_path}")
-
             if hasattr(self, 'session') and self.session and hasattr(self.session, 'is_closed') and not self.session.is_closed:
                 self.session.close()
                 print("SQLModel session explicitly closed (if it was a long-lived instance var).")

@@ -1,7 +1,10 @@
 import os
 from typing import List
+
+from pydantic import BaseModel
+
 from memory import MemoryManagerSQL, LongTermMemoryEntry
-from pydantic_ai import Agent
+from pydantic_ai import Agent, RunContext
 from pydantic_ai.messages import ModelMessage # For Phase 1 STM
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -34,6 +37,16 @@ if RECREATE_DB_AND_FAISS_ON_FIRST_PHASE1_RUN:
     if not os.path.exists(LTM_DATA_DIR): os.makedirs(LTM_DATA_DIR, exist_ok=True)
 
 
+class MemoryContext(BaseModel):
+    user_id: str
+    relevant_memories: List[LongTermMemoryEntry]
+
+memory_agent = Agent(
+        model=f"openai:{OPENAI_MODEL_NAME}",
+        deps_type=MemoryContext
+    )
+
+
 memory_manager = MemoryManagerSQL(
     db_url=DATABASE_URL,
     embedding_model_name=EMBEDDING_MODEL_NAME,
@@ -41,14 +54,16 @@ memory_manager = MemoryManagerSQL(
 )
 print(f"MemoryManagerSQL setup for DB: {DB_NAME}")
 
+
 # --- Phase 1: Store Every User Utterance ---
+
 def run_phase1_store_everything_interactive():
     print("\n--- PHASE 1: CHAT & STORE ALL YOUR INPUTS to LTM ---")
     print("Everything you type will be stored. Type 'quit' to end.")
 
     agent_phase1 = Agent(
         model=f"openai:{OPENAI_MODEL_NAME}",
-        system_prompt="You are a friendly chat partner."
+
     )
     current_stm: List[ModelMessage] = []
 
@@ -79,54 +94,36 @@ def run_phase1_store_everything_interactive():
             print(f"    [ERROR storing to LTM: {e}]")
     print("\n--- PHASE 1: LTM Population Complete ---")
 
-# --- Phase 2: Recall LTM ---
-def run_phase2_recall_everything_interactive():
-    print("\n--- PHASE 2: CHAT & RECALL LTM ---")
-    print("Ask questions. The agent will be given your past relevant statements as context. Type 'quit' to end.")
+
+
+
+
+@memory_agent.system_prompt
+def dynamic_system_prompt(ctx: RunContext[MemoryContext]) -> str:
+    memories = ctx.deps.relevant_memories
+    memory_context = "\n".join([f"- {mem.data.get('text', '')}" for mem in memories])
+    return f"Relevant user history:\n{memory_context}\n\nRespond helpfully."
+
+
+def run_phase2_dynamic_prompt():
+    # agent = Agent(model=f"openai:{OPENAI_MODEL_NAME}", deps_type=MemoryContext)
 
     while True:
         user_query = input(f"{USER_ID} (You): ")
-        if user_query.lower() == 'quit':
-            break
-        if not user_query.strip():
-            continue
+        if user_query.lower() == 'quit': break
 
-        print("    Retrieving relevant past statements from LTM...")
-        retrieved_ltm_items = memory_manager.retrieve_memories_semantic(
-            query=user_query, user_id=USER_ID, k=10 # Retrieve top 3 past user utterances
+        # Retrieve relevant memories
+        memories = memory_manager.retrieve_memories_semantic(user_query, USER_ID, k=10)
+
+        # Run with dynamic context - much simpler!
+        result = memory_agent.run_sync(
+            user_prompt=user_query,
+            deps=MemoryContext(user_id=USER_ID, relevant_memories=memories)
         )
 
-        if retrieved_ltm_items:
-            ltm_context_for_prompt = "\n\n=== Some of your relevant past statements were: ===\n"
-            for item in retrieved_ltm_items:
-                # Assuming item.data is {"text": "original user input"}
-                past_utterance = item.data.get("text", "[Could not extract past statement text]")
-                ltm_context_for_prompt += f"- \"{past_utterance}\"\n"
-            ltm_context_for_prompt += "====================================================\n"
-            print(f"    [LTM Context for Agent (Snippet): {ltm_context_for_prompt[:200].strip()}...]")
-        else:
-            print("    [No specific past statements found in LTM for this question.]")
-            ltm_context_for_prompt = "\n[No specific relevant background information from your past statements was found.]\n"
+        print(f"Agent: {result.output}")
 
-        recall_agent_system_prompt = (
-            "You are a helpful assistant. The user is chatting with you again after a break. "
-            "To help you understand the context, here are some relevant things the user said in previous conversations:"
-            f"{ltm_context_for_prompt}"
-            "Now, please answer the user's current question based on this context if it's helpful, "
-            "otherwise use your general knowledge."
-        )
 
-        recall_agent = Agent(
-            model=f"openai:{OPENAI_MODEL_NAME}",
-            system_prompt=recall_agent_system_prompt
-        )
-
-        print("    Agent (with LTM context) processing...")
-        response_obj = recall_agent.run_sync(user_prompt=user_query)
-        assistant_reply = response_obj.output
-        print(f"Agent: {assistant_reply}")
-
-    print("\n--- PHASE 2: LTM Recall Test Complete ---")
 
 if __name__ == "__main__":
     print("Ultra-Simple Interactive LTM Test (Storing All User Inputs)")
@@ -136,11 +133,12 @@ if __name__ == "__main__":
     while True:
         choice = input("\nChoose mode: [1] Chat & Store LTM (Phase 1), [2] Chat & Recall LTM (Phase 2), [q] Quit: ").strip().lower()
         if choice == '1':
+            pass
             run_phase1_store_everything_interactive()
         elif choice == '2':
             if RECREATE_DB_AND_FAISS_ON_FIRST_PHASE1_RUN:
                 print("Warning: RECREATE_DB_AND_FAISS_ON_FIRST_PHASE1_RUN is True. Phase 2 might not find LTM if Phase 1 wasn't just run.")
-            run_phase2_recall_everything_interactive()
+            run_phase2_dynamic_prompt()
         elif choice == 'q':
             break
         else:
