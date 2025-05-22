@@ -2,6 +2,8 @@ import os
 from typing import List
 
 from pydantic import BaseModel
+from sqlalchemy import text
+from sqlmodel import Session
 
 from memory import MemoryManagerSQL, LongTermMemoryEntry
 from pydantic_ai import Agent, RunContext
@@ -21,7 +23,10 @@ EMBEDDING_MODEL_NAME = 'all-MiniLM-L6-v2'
 LTM_DATA_DIR = os.path.join(os.getcwd(), "ltm_agent_data_store_all")
 
 OPENAI_MODEL_NAME = "gpt-4o-mini"
-USER_ID = "User-1"
+
+def get_current_user():
+    username = input("Enter your username: ").strip()
+    return username if username else "Anonymous"
 
 # --- 2. Initialize MemoryManager ---
 RECREATE_DB_AND_FAISS_ON_FIRST_PHASE1_RUN = False # TRUE for 1st Phase 1, then FALSE
@@ -41,10 +46,59 @@ class MemoryContext(BaseModel):
     user_id: str
     relevant_memories: List[LongTermMemoryEntry]
 
-memory_agent = Agent(
-        model=f"openai:{OPENAI_MODEL_NAME}",
-        deps_type=MemoryContext
-    )
+agent = Agent(
+    model=f"openai:{OPENAI_MODEL_NAME}",
+    deps_type=MemoryContext
+)
+
+
+def cleanup_all_data():
+    """Clean up all data from both PostgreSQL and FAISS"""
+    print("⚠️  WARNING: This will delete ALL data from PostgreSQL and FAISS!")
+    confirm = input("Type 'DELETE ALL' to confirm: ").strip()
+
+    if confirm != 'DELETE ALL':
+        print("Cleanup cancelled.")
+        return
+
+    try:
+        # 1. Clean PostgreSQL
+        with Session(memory_manager.engine) as session:
+            # Delete all records from the table
+            session.exec(text("DELETE FROM long_term_memories_sqlmodel"))
+            session.commit()
+            print("✅ PostgreSQL table cleared")
+
+        # 2. Clean FAISS index
+        memory_manager._initialize_fresh_faiss()  # Reset to empty FAISS
+
+        # 3. Remove FAISS files from disk
+        index_path = os.path.join(memory_manager.data_dir, "my_faiss_index.idx")
+        map_path = os.path.join(memory_manager.data_dir, "faiss_id_mappings.pkl")
+
+        for file_path in [index_path, map_path]:
+            if os.path.exists(file_path):
+                os.remove(file_path)
+                print(f"✅ Removed {os.path.basename(file_path)}")
+
+        print("✅ All data cleaned successfully!")
+
+    except Exception as e:
+        print(f"❌ Error during cleanup: {e}")
+
+@agent.system_prompt
+def base_system_prompt() -> str:
+    return "You are a helpful AI assistant."
+
+
+@agent.system_prompt
+def dynamic_system_prompt(ctx: RunContext[MemoryContext]) -> str:
+    memories = ctx.deps.relevant_memories
+    if not memories:
+        return ""  # No additional context if no memories
+
+    memory_context = "\n".join([f"- {mem.data.get('text', '')}" for mem in memories])
+    return f"Relevant user history:\n{memory_context}\n\nRespond helpfully using this context."
 
 
 memory_manager = MemoryManagerSQL(
@@ -60,31 +114,30 @@ print(f"MemoryManagerSQL setup for DB: {DB_NAME}")
 def run_phase1_store_everything_interactive():
     print("\n--- PHASE 1: CHAT & STORE ALL YOUR INPUTS to LTM ---")
     print("Everything you type will be stored. Type 'quit' to end.")
+    current_user = get_current_user()
 
-    agent_phase1 = Agent(
-        model=f"openai:{OPENAI_MODEL_NAME}",
-
-    )
     current_stm: List[ModelMessage] = []
 
     while True:
-        user_input = input(f"{USER_ID} (You): ")
+        user_input = input(f"{current_user} (You): ")
         if user_input.lower() == 'quit':
             break
         if not user_input.strip(): # Skip empty inputs
             continue
 
-        response_obj = agent_phase1.run_sync(user_prompt=user_input, message_history=current_stm)
+        empty_context = MemoryContext(user_id=current_user, relevant_memories=[])
+
+        response_obj = agent.run_sync(user_prompt=user_input, message_history=current_stm, deps=empty_context)
         assistant_reply = response_obj.output
         print(f"Agent: {assistant_reply}")
         current_stm = response_obj.all_messages()
 
         # Store the user's raw input as an LTM entry
         ltm_entry = LongTermMemoryEntry(
-            user_id=USER_ID,
+            user_id=current_user,
             content_type="user_utterance",
             data={"text": user_input}, # Store the raw text
-            embedding_source_text=f"User {USER_ID} previously said: {user_input}", # Contextualize for embedding
+            embedding_source_text=f"User {current_user} previously said: {user_input}", # Contextualize for embedding
             tags=["utterance", "phase1_chat"]
         )
         try:
@@ -98,27 +151,29 @@ def run_phase1_store_everything_interactive():
 
 
 
-@memory_agent.system_prompt
-def dynamic_system_prompt(ctx: RunContext[MemoryContext]) -> str:
-    memories = ctx.deps.relevant_memories
-    memory_context = "\n".join([f"- {mem.data.get('text', '')}" for mem in memories])
-    return f"Relevant user history:\n{memory_context}\n\nRespond helpfully."
+# @agent.system_prompt
+# def dynamic_system_prompt(ctx: RunContext[MemoryContext]) -> str:
+#     memories = ctx.deps.relevant_memories
+#     memory_context = "\n".join([f"- {mem.data.get('text', '')}" for mem in memories])
+#     return f"Relevant user history:\n{memory_context}\n\nRespond helpfully."
 
 
 def run_phase2_dynamic_prompt():
     # agent = Agent(model=f"openai:{OPENAI_MODEL_NAME}", deps_type=MemoryContext)
 
+    current_user = get_current_user()
+
     while True:
-        user_query = input(f"{USER_ID} (You): ")
+        user_query = input(f"{current_user} (You): ")
         if user_query.lower() == 'quit': break
 
         # Retrieve relevant memories
-        memories = memory_manager.retrieve_memories_semantic(user_query, USER_ID, k=10)
+        memories = memory_manager.retrieve_memories_semantic(user_query, current_user, k=10)
 
         # Run with dynamic context - much simpler!
-        result = memory_agent.run_sync(
+        result = agent.run_sync(
             user_prompt=user_query,
-            deps=MemoryContext(user_id=USER_ID, relevant_memories=memories)
+            deps=MemoryContext(user_id=current_user, relevant_memories=memories)
         )
 
         print(f"Agent: {result.output}")
@@ -131,7 +186,7 @@ if __name__ == "__main__":
         print("IMPORTANT: RECREATE_DB_AND_FAISS_ON_FIRST_PHASE1_RUN is True.")
 
     while True:
-        choice = input("\nChoose mode: [1] Chat & Store LTM (Phase 1), [2] Chat & Recall LTM (Phase 2), [q] Quit: ").strip().lower()
+        choice = input("\nChoose mode: [1] Chat & Store LTM (Phase 1), [2] Chat & Recall LTM (Phase 2), [3] Cleanup All Data, [q] Quit: ").strip().lower()
         if choice == '1':
             pass
             run_phase1_store_everything_interactive()
@@ -139,6 +194,8 @@ if __name__ == "__main__":
             if RECREATE_DB_AND_FAISS_ON_FIRST_PHASE1_RUN:
                 print("Warning: RECREATE_DB_AND_FAISS_ON_FIRST_PHASE1_RUN is True. Phase 2 might not find LTM if Phase 1 wasn't just run.")
             run_phase2_dynamic_prompt()
+        elif choice == '3':
+            cleanup_all_data()
         elif choice == 'q':
             break
         else:
