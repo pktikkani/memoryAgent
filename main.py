@@ -148,16 +148,6 @@ def run_phase1_store_everything_interactive():
     print("\n--- PHASE 1: LTM Population Complete ---")
 
 
-
-
-
-# @agent.system_prompt
-# def dynamic_system_prompt(ctx: RunContext[MemoryContext]) -> str:
-#     memories = ctx.deps.relevant_memories
-#     memory_context = "\n".join([f"- {mem.data.get('text', '')}" for mem in memories])
-#     return f"Relevant user history:\n{memory_context}\n\nRespond helpfully."
-
-
 def run_phase2_dynamic_prompt():
     # agent = Agent(model=f"openai:{OPENAI_MODEL_NAME}", deps_type=MemoryContext)
 
