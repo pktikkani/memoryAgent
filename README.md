@@ -275,8 +275,8 @@ mypy .
 
 For detailed implementation guides, check out our blog series:
 
-- **[Part 1: Building Long-Term Memory for AI Agents](blog-link-part1)** - Architecture and Implementation
-- **[Part 2: Using Long-Term Memory with Pydantic AI](blog-link-part2)** - Practical Usage and Integration
+- **[Part 1: Building Long-Term Memory for AI Agents](https://x.com/pktikkani/status/1925388817303032214)** - Architecture and Implementation
+- **[Part 2: Using Long-Term Memory with Pydantic AI](https://x.com/pktikkani/status/1926178186108305891)** - Practical Usage and Integration
 
 
 
