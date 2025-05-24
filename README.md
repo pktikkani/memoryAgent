@@ -1,4 +1,4 @@
-# Long-Term Memory for AI Agents
+# Long-Term Memory for Pydanic AI Agents
 
 A production-ready implementation of persistent memory for AI agents using Pydantic AI, PostgreSQL, and FAISS. This system enables AI agents to remember conversations, learn user preferences, and provide increasingly personalized assistance over time.
 
@@ -17,7 +17,7 @@ The system uses a hybrid storage approach:
 
 - **Pydantic AI**: Modern framework for building production-ready AI agents
 - **PostgreSQL**: Stores structured memory data with JSONB and array support
-- **FAISS**: Handles vector embeddings for fast semantic similarity search
+- **FAISS**: Handles vector embeddings for fast semantic simil2]][[[arity search
 - **Sentence Transformers**: Converts text to high-quality embeddings
 
 ## 📋 Prerequisites
