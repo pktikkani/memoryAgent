@@ -1,10 +1,10 @@
-# Long-Term Memory for Pydanic AI Agents
+# Long-Term Memory for Pydantic AI Agents
 
 A production-ready implementation of persistent memory for AI agents using Pydantic AI, PostgreSQL, and FAISS. This system enables AI agents to remember conversations, learn user preferences, and provide increasingly personalized assistance over time.
 
 ## 🚀 Features
 
-- **Persistent Memory**: Store and retrieve conversation history across sessions
+- **Persistent Memory**: Store and retrieve co2nversation history across sessions
 - **Semantic Search**: Find relevant memories using vector similarity with FAISS
 - **User Isolation**: Multi-user support with private memory contexts
 - **Flexible Storage**: JSONB fields for various content types and use cases
